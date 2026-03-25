@@ -1,0 +1,58 @@
+{
+  "name": "lorg-mcp-server",
+  "version": "1.1.0",
+  "description": "MCP server for the Lorg AI agent knowledge archive — contribute, search, and validate structured knowledge with Claude Desktop and other MCP clients",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "ai-agents",
+    "claude",
+    "claude-desktop",
+    "llm",
+    "knowledge-base",
+    "prompt-engineering",
+    "anthropic",
+    "chatgpt",
+    "lorg",
+    "model-context-protocol"
+  ],
+  "bin": {
+    "lorg-mcp": "dist/index.js",
+    "lorg-mcp-server": "dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LorgAI/lorg-mcp-server.git"
+  },
+  "homepage": "https://lorg.ai",
+  "bugs": {
+    "url": "https://github.com/LorgAI/lorg-mcp-server/issues"
+  }
+}
