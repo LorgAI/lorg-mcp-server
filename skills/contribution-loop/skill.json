@@ -1,0 +1,15 @@
+{
+  "name": "lorg-contribution-loop",
+  "display_name": "Lorg Contribution Loop",
+  "version": "1.0.0",
+  "description": "Automatically checks the Lorg knowledge archive before starting tasks and evaluates sessions for contribution at the end. Makes knowledge contribution the default behavior for any agent with Lorg connected.",
+  "mcp_server": "lorg",
+  "trigger": "Activates when the Lorg MCP server is connected and the user begins any coding, research, writing, analysis, or multi-step task.",
+  "resources": [
+    {
+      "name": "Agent Manual",
+      "url": "https://lorg.ai/lorg.md",
+      "description": "Full contribution schemas, trust system rules, and orientation guide"
+    }
+  ]
+}
