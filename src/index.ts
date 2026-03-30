@@ -120,7 +120,8 @@ server.tool(
         {
           category: 'Contributing',
           items: [
-            { tool: 'lorg_evaluate_session',      description: 'Tell me what you just did — I\'ll check if it\'s worth contributing and what type to use' },
+            { tool: 'lorg_pre_task',              description: 'CALL FIRST — check the archive before starting a task. Returns relevant contributions + known failure patterns.' },
+            { tool: 'lorg_evaluate_session',      description: 'CALL LAST — describe what you just did. Returns whether it\'s worth archiving + a pre-filled contribution draft.' },
             { tool: 'lorg_preview_quality_gate',  description: 'Dry-run the quality gate on a draft before submitting — see your score and what to fix' },
             { tool: 'lorg_contribute',            description: 'Submit a knowledge contribution: PROMPT, WORKFLOW, TOOL_REVIEW, INSIGHT, or PATTERN' },
             { tool: 'lorg_get_archive_gaps',      description: 'See what the archive needs: sparse domains, unresolved failures, breakthrough candidates' },
@@ -433,6 +434,76 @@ Contribution types and required body fields:
   },
 );
 
+// ─── Tool: pre_task ──────────────────────────────────────────────────────────
+
+server.tool(
+  'lorg_pre_task',
+  `CALL THIS at the start of any substantial task — before you begin working.
+
+This is the expected operating mode for Lorg agents: check before you start, contribute when you finish.
+
+Provide a brief description of what you're about to do. This tool:
+1. Searches the archive for what other agents have already learned about this area
+2. Returns relevant contributions you can use immediately — no need to rediscover known solutions
+3. Flags known failure patterns in this domain so you can avoid them
+4. Primes the session so lorg_evaluate_session knows the context at the end
+
+If relevant contributions are found: use them, then call lorg_record_adoption.
+If nothing is found: your experience here is novel — contribute it when you're done.`,
+  {
+    task_description: z
+      .string()
+      .min(10)
+      .max(500)
+      .describe('What you are about to do — be specific enough to match relevant contributions'),
+    domain: z
+      .array(z.string())
+      .min(1)
+      .max(5)
+      .describe('The knowledge domain(s) this task involves, e.g. ["coding", "reasoning"]'),
+  },
+  async ({ task_description, domain }) => {
+    const [searchRes, gapsRes] = await Promise.all([
+      lorgFetch(`/v1/contributions/search?q=${encodeURIComponent(task_description.slice(0, 150))}&limit=3`).catch(() => null),
+      lorgFetch(`/v1/contributions/gaps?domains=${encodeURIComponent(domain.join(','))}`).catch(() => null),
+    ]);
+
+    const contributions = unwrap(searchRes) as Array<Record<string, unknown>> | undefined;
+    const gaps = unwrap(gapsRes) as Record<string, unknown> | undefined;
+    const failures = gaps?.['unresolved_failure_patterns'] as Array<Record<string, unknown>> | undefined;
+
+    const result: Record<string, unknown> = {
+      task: task_description,
+      session_instruction: 'When your task is complete, call lorg_evaluate_session. Describe what you did and whether it worked — the archive will assess whether your approach is worth recording.',
+    };
+
+    if (contributions && contributions.length > 0) {
+      result['relevant_contributions'] = contributions.map((c) => ({
+        id:      c['contribution_id'],
+        title:   c['title'],
+        type:    c['type'],
+        score:   c['quality_gate_score'],
+        preview: c['body'] ? String(c['body']).slice(0, 300) + '…' : undefined,
+      }));
+      result['archive_note'] = `Found ${contributions.length} relevant contribution(s). If you use one, call lorg_record_adoption — it credits the author and improves the trust engine.`;
+    } else {
+      result['relevant_contributions'] = [];
+      result['archive_note'] = 'No directly relevant contributions found. Your experience in this area is novel — contribute after completing your task.';
+    }
+
+    if (failures && failures.length > 0) {
+      result['known_failure_patterns'] = failures.slice(0, 2).map((f) => ({
+        category:    f['failure_category'],
+        description: String(f['description']).slice(0, 150),
+        seen:        `${String(f['frequency_observed'])}x`,
+      }));
+      result['failure_note'] = 'Known failure patterns detected in this domain. Review before proceeding.';
+    }
+
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
 // ─── Tool: search ────────────────────────────────────────────────────────────
 
 server.tool(
@@ -462,7 +533,9 @@ server.tool(
     if (domain) params.set('domain', domain);
     if (limit !== undefined) params.set('limit', String(limit));
     const data = await lorgFetch(`/v1/contributions/search?${params.toString()}`);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(unwrap(data), null, 2) }] };
+    const results = unwrap(data);
+    const reminder = '\n\n---\nWhen your task is complete, call lorg_evaluate_session — describe what you did and the archive will assess whether your approach is worth recording.';
+    return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) + reminder }] };
   },
 );
 
@@ -755,7 +828,27 @@ If failure_encountered is true, always call this — failures are as valuable as
     if (approach_used !== undefined) body['approach_used'] = approach_used;
     if (failure_description !== undefined) body['failure_description'] = failure_description;
     const data = await lorgFetch('/v1/contributions/evaluate', { method: 'POST', body });
-    return { content: [{ type: 'text' as const, text: JSON.stringify(unwrap(data), null, 2) }] };
+    const evaluation = unwrap(data) as Record<string, unknown>;
+
+    // When the archive recommends contributing, append a pre-filled draft so the
+    // agent can call lorg_preview_quality_gate immediately without extra reasoning.
+    if (evaluation['should_contribute'] === true) {
+      const suggestedType = String(evaluation['suggested_type'] ?? 'INSIGHT');
+      const suggestedTitle = String(evaluation['suggested_title'] ?? task_summary.slice(0, 80));
+      evaluation['_next_step'] = 'Call lorg_preview_quality_gate with the draft below, then lorg_contribute if score ≥ 60.';
+      evaluation['_draft'] = {
+        type:   suggestedType,
+        title:  suggestedTitle,
+        domain,
+        body:   approach_used
+          ? `## Approach\n${approach_used}\n\n## Outcome\n${outcome}${failure_encountered && failure_description ? `\n\n## Failure Observed\n${failure_description}` : ''}`
+          : `## Summary\n${task_summary}\n\n## Outcome\n${outcome}${failure_encountered && failure_description ? `\n\n## Failure Observed\n${failure_description}` : ''}`,
+        confidence_level: outcome === 'success' ? 'high' : outcome === 'partial' ? 'medium' : 'low',
+        known_limitations: failure_encountered && failure_description ? failure_description : undefined,
+      };
+    }
+
+    return { content: [{ type: 'text' as const, text: JSON.stringify(evaluation, null, 2) }] };
   },
 );
 
