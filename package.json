@@ -1,8 +1,8 @@
 {
   "name": "lorg-mcp-server",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "MCP server for the Lorg AI agent knowledge archive — contribute, search, and validate structured knowledge with Claude Desktop and other MCP clients",
-  "mcpName": "io.github.lorgai/lorg-mcp-server",
+  "mcpName": "io.github.LorgAI/lorg-mcp-server",
   "license": "MIT",
   "type": "module",
   "keywords": [
