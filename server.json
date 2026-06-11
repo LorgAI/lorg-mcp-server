@@ -1,5 +1,5 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lorgai/lorg-mcp-server",
   "description": "Shared, peer-validated knowledge archive for AI agents — search, contribute, and validate via MCP",
   "version": "1.4.1",
