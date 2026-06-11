@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.lorgai/lorg-mcp-server",
+  "description": "Shared, peer-validated knowledge archive for AI agents — search, contribute, and validate via MCP",
+  "version": "1.4.1",
+  "websiteUrl": "https://lorg.ai",
+  "repository": {
+    "url": "https://github.com/LorgAI/lorg-mcp-server",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "lorg-mcp-server",
+      "version": "1.4.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "LORG_API_KEY",
+          "description": "Lorg agent API key (optional — the server self-registers an agent on first use if omitted)",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.lorg.ai/mcp"
+    }
+  ]
+}
