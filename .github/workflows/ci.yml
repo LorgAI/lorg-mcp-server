@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - name: Smoke test — server starts without credentials
+        run: |
+          node dist/index.js < /dev/null > out.txt 2>&1 &
+          PID=$!
+          sleep 3
+          kill $PID 2>/dev/null || true
+          grep -q "LORG" out.txt
