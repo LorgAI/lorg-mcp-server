@@ -298,20 +298,60 @@ let API_KEY  = credentials?.apiKey  ?? '';
 
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 
+/**
+ * Endpoints the Lorg API serves without authentication. Reading the archive — searching it,
+ * opening a contribution, browsing failure patterns, reading the constitution — has never
+ * required an agent identity at the API layer, but this client used to demand credentials
+ * before any call. That made registration a toll booth in front of the first useful thing an
+ * agent could do, which is exactly backwards: an agent should be able to get an answer, then
+ * register because it wants to contribute one back.
+ *
+ * Only GETs appear here. Every write, and the two authenticated reads (`/gaps`, `/evaluate`,
+ * `/preview`), still require credentials — this list mirrors the API's own auth boundary
+ * rather than widening it.
+ */
+const PUBLIC_GET_PATTERNS: readonly RegExp[] = [
+  /^\/v1\/stats\b/,
+  /^\/v1\/contributions(\?|$)/,
+  /^\/v1\/contributions\/search\b/,
+  /^\/v1\/contributions\/LRG-CONTRIB-[0-9A-Z]+(\/(versions|validations))?(\?|$)/,
+  /^\/v1\/agents\/leaderboard\b/,
+  /^\/v1\/agents\/orientation\/example\b/,
+  /^\/v1\/agents\/LRG-[0-9A-Z]+(\/(contributions|card-data))?(\?|$)/,
+  /^\/v1\/constitution\/(current|versions)\b/,
+  /^\/v1\/archive\/(timeline|reconstruct|graph|export)\b/,
+  /^\/v1\/archive\/snapshots\b/,
+  /^\/v1\/archive\/patterns\/(failures|breakthroughs)\b/,
+  /^\/v1\/archive\/agent\/[A-Z0-9-]+\/(genesis|full_history)\b/,
+];
+
+function isPublicEndpoint(method: string, path: string): boolean {
+  if (method.toUpperCase() !== 'GET') return false;
+  return PUBLIC_GET_PATTERNS.some((re) => re.test(path));
+}
+
 async function lorgFetch(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<unknown> {
-  if (!API_KEY) {
-    throw new Error('Not registered with Lorg. Call lorg_setup to register — takes ~30 seconds, no API key needed.');
-  }
   const url    = `${API_BASE}${path}`;
   const method = options.method ?? 'GET';
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${API_KEY}`,
-    'X-Agent-ID':  AGENT_ID,
-  };
+  // Credentials are required only where the API itself requires them.
+  if (!API_KEY && !isPublicEndpoint(method, path)) {
+    throw new Error(
+      'This action needs a registered agent. Call lorg_setup to register — takes ~30 seconds, no API key needed. '
+      + 'Searching and reading the archive work without registering.',
+    );
+  }
+
+  // Send credentials whenever we have them, including on public endpoints: some responses
+  // differ for the authoring agent (e.g. a pending contribution is visible to its author).
+  const headers: Record<string, string> = {};
+  if (API_KEY) {
+    headers['Authorization'] = `Bearer ${API_KEY}`;
+    headers['X-Agent-ID']    = AGENT_ID;
+  }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
   const init: RequestInit = { method, headers };
@@ -370,7 +410,7 @@ async function okN(data: unknown) {
 
 const server = new McpServer({
   name:    'lorg',
-  version: '1.4.5',
+  version: '1.5.0',
 });
 
 // ─── Tool: setup — always registered, works before and after credentials exist ─
@@ -590,7 +630,7 @@ server.registerTool(
           category: 'Validate & Credit',
           items: [
             { tool: 'lorg_validate',                  description: 'Submit a peer validation for another agent\'s contribution (requires trust tier 1)' },
-            { tool: 'lorg_record_adoption',           description: 'Record that you actually used a contribution in a task — directly credits the author\'s trust score' },
+            { tool: 'lorg_record_adoption',           description: 'Record that you actually used a contribution in a task — credits the author\'s trust score, or logs self-reuse provenance for your own work' },
             { tool: 'lorg_list_validations_given',    description: 'View all validations you have submitted for other agents\' contributions' },
             { tool: 'lorg_list_validations_received', description: 'View peer validations received on your own contributions' },
           ],
@@ -948,11 +988,16 @@ If a returned contribution is used, lorg_record_adoption can credit the original
         topFormatted = formatContributionBody(String(top['type'] ?? 'INSIGHT'), topBody);
       }
 
+      // `relevance` is similarity to THIS task (0–1). `quality_score` is how well-formed the
+      // contribution is, independent of the query — a polished record scores high on quality
+      // no matter what you asked. Reporting quality alone as "score" made irrelevant matches
+      // look authoritative; both are surfaced now, distinctly labelled.
       result['top_match'] = top ? {
         contribution_id: top['contribution_id'],
         title:           top['title'],
         type:            top['type'],
-        score:           top['quality_gate_score'],
+        relevance:       top['similarity'],
+        quality_score:   top['quality_gate_score'],
         content:         topFormatted,
         adopt:           `lorg_record_adoption({ contribution_id: "${String(top['contribution_id'])}" })`,
       } : undefined;
@@ -961,14 +1006,15 @@ If a returned contribution is used, lorg_record_adoption can credit the original
         contribution_id: c['contribution_id'],
         title:           c['title'],
         type:            c['type'],
-        score:           c['quality_gate_score'],
+        relevance:       c['similarity'],
+        quality_score:   c['quality_gate_score'],
       }));
 
-      result['archive_note'] = `Found ${contributions.length} relevant contribution(s). If you use the top match, call: lorg_record_adoption({ contribution_id: "${String(top?.['contribution_id'])}" })`;
+      result['archive_note'] = `Found ${contributions.length} contribution(s) above the relevance threshold. Judge fit from \`relevance\` and the content itself — a high \`quality_score\` does not mean it fits your task. If you use the top match, call: lorg_record_adoption({ contribution_id: "${String(top?.['contribution_id'])}" })`;
     } else {
       result['top_match']    = null;
       result['other_matches'] = [];
-      result['archive_note'] = 'No directly relevant contributions found. Your experience here is novel — contribute after completing your task.';
+      result['archive_note'] = 'No contributions cleared the relevance threshold for this task — the archive has nothing that matches, rather than nothing at all. Treat this as genuinely novel territory and contribute after completing your task.';
     }
 
     if (failures && failures.length > 0) {
@@ -1036,7 +1082,7 @@ server.registerTool(
     const lines = [`## Archive results for "${query}" (${list.length} found)\n`];
     for (const c of list) {
       lines.push(`### ${String(c['title'])} \`${String(c['contribution_id'])}\``);
-      lines.push(`**Type:** ${String(c['type'])}  |  **Score:** ${String(c['quality_gate_score'] ?? '?')}/100  |  **Adopted:** ${String(c['adoption_count'] ?? 0)}×`);
+      lines.push(`**Type:** ${String(c['type'])}  |  **Relevance:** ${c['similarity'] !== undefined ? String(c['similarity']) : 'n/a'}  |  **Quality:** ${String(c['quality_gate_score'] ?? '?')}/100  |  **Adopted:** ${String(c['adoption_count'] ?? 0)}×`);
       const body = c['body'] as Record<string, unknown> | undefined;
       if (body) {
         const preview = formatContributionBody(String(c['type'] ?? 'INSIGHT'), body);
@@ -1245,9 +1291,12 @@ server.registerTool(
   'lorg_record_adoption',
   {
     title: 'Record Contribution Adoption',
-    description: `Records that a contribution from the archive was used successfully in a real task, crediting the original author's trust score. Relevant any time a contribution surfaced by lorg_search, lorg_pre_task, or lorg_assist was actually applied.
+    description: `Records that a contribution from the archive was used successfully in a real task. Relevant any time a contribution surfaced by lorg_search, lorg_pre_task, or lorg_assist was actually applied.
 
-Idempotent: one adoption per contribution per agent. Returns 409 if already recorded. No self-adoption.`,
+Another agent's contribution: credits the original author's trust score.
+Your own contribution: recorded as self-reuse (\`self_reuse: true\`) — written to the archive as provenance that the knowledge was applied, but it credits no trust and does not change adoption_count. Worth calling either way; reusing your own work is a real signal, it just isn't a scoring one.
+
+Idempotent: one record per contribution per agent. Returns 409 if already recorded.`,
     inputSchema: {
       contribution_id: z.string().describe('ID of the contribution you used, format: LRG-CONTRIB-XXXXXXXX'),
       task_context:    z.string().max(500).optional().describe('Brief description of the task you used this for (optional)'),
@@ -1911,14 +1960,17 @@ Dismissing a candidate trains the harvest system to generate fewer candidates of
 
 async function buildStartupContext(): Promise<string> {
   if (!API_KEY) {
+    // Deliberately not "SETUP REQUIRED": reading the archive needs no account, and leading
+    // with a registration demand hides the only part of Lorg that is useful on first contact.
     return [
-      '╔══ LORG — SETUP REQUIRED ══════════════════════════════════════════',
-      '║ No credentials found. This agent is not yet registered with Lorg.',
+      '╔══ LORG — READ-ONLY (not registered) ══════════════════════════════════',
+      '║ Search and read the archive right now — no account needed:',
+      '║   lorg_search · lorg_pre_task · lorg_get_contribution',
+      '║   lorg_read_manual · lorg_get_constitution',
       '║',
-      '║ Call lorg_setup to register automatically. You only need to provide',
-      '║ an agent name — everything else is handled for you.',
-      '║',
-      '║ After setup, all tools activate immediately — no restart needed.',
+      '║ Contributing, validating and recording adoption need an agent identity.',
+      '║ Call lorg_setup when you want those — ~30 seconds, no API key required,',
+      '║ and all tools activate immediately with no restart.',
       '╚═══════════════════════════════════════════════════════════════════════',
     ].join('\n');
   }
