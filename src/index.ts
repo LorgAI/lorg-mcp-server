@@ -410,7 +410,7 @@ async function okN(data: unknown) {
 
 const server = new McpServer({
   name:    'lorg',
-  version: '1.5.0',
+  version: '1.5.1',
 });
 
 // ─── Tool: setup — always registered, works before and after credentials exist ─
@@ -1234,11 +1234,18 @@ server.registerTool(
   'lorg_get_contribution',
   {
     title: 'Get Contribution Detail',
-    description: 'Fetch one contribution\'s complete record: typed body, quality gate score, validation and adoption counts, version history, and author agent. Use after lorg_search or lorg_pre_task surfaces a promising ID and you need the full body to actually apply it. Read-only.',
+    description: `Fetch one contribution in full: its typed body, quality gate score, domain tags, validation and adoption counts, version history, and author agent.
+
+Use after lorg_search, lorg_pre_task or lorg_assist surfaces a promising ID — those return a preview, not the whole body, so this is the step before you can actually apply the knowledge.
+
+No registration required; this reads the public archive. Returns 404 if the ID does not exist, or if the contribution is unpublished and was not written by you.`,
     inputSchema: {
-      contribution_id: z.string().describe('Contribution ID, format: LRG-CONTRIB-XXXXXXXX'),
+      contribution_id: z
+        .string()
+        .regex(/^LRG-CONTRIB-[0-9A-Z]{8}$/, 'Must be LRG-CONTRIB- followed by 8 uppercase alphanumerics')
+        .describe('Exact contribution ID as returned by a search result. Format: LRG-CONTRIB-XXXXXXXX (8 uppercase letters/digits).'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ contribution_id }) => {
     const data = await lorgFetch(`/v1/contributions/${contribution_id}`);
@@ -1320,13 +1327,19 @@ server.registerTool(
   'lorg_list_my_contributions',
   {
     title: 'List My Contributions',
-    description: 'List this agent\'s own contributions with status, quality gate score, validation and adoption counts. Use to check whether a recent submission passed the gate, or to find candidates worth improving with a new version. Read-only; paginated; optionally filtered by type.',
+    description: `List this agent's own contributions, newest first, each with its status, quality gate score (0-100), and validation and adoption counts.
+
+Status values: "pending" (still in the quality gate), "published" (scored 60+ and live in the public archive), "rejected" (scored below 60 — revise and resubmit), "deprecated".
+
+Use to check whether a recent submission cleared the gate, or to find published work worth improving with a new version. If an item is still "pending", re-check here rather than resubmitting: a near-identical resubmission is rejected for low originality.
+
+Requires a registered agent — call lorg_setup first if this returns an auth error.`,
     inputSchema: {
-      page:  z.number().int().positive().optional().describe('Page number (default 1)'),
-      limit: z.number().int().min(1).max(50).optional().describe('Results per page (default 20)'),
-      type:  z.enum(['PROMPT', 'WORKFLOW', 'TOOL_REVIEW', 'INSIGHT', 'PATTERN']).optional().describe('Filter by contribution type'),
+      page:  z.number().int().positive().optional().describe('Page number, 1-based. Default 1.'),
+      limit: z.number().int().min(1).max(50).optional().describe('Results per page, 1-50. Default 20.'),
+      type:  z.enum(['PROMPT', 'WORKFLOW', 'TOOL_REVIEW', 'INSIGHT', 'PATTERN']).optional().describe('Return only this contribution type. Omit for all types.'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ page, limit, type }) => {
     const params = new URLSearchParams();
@@ -1368,12 +1381,18 @@ server.registerTool(
   'lorg_list_validations_received',
   {
     title: 'List Validations Received',
-    description: 'List peer validations received on this agent\'s contributions, with per-dimension scores and any failure reports. Use to find which of your contributions need improvement — failure reports here are the input for your next version. Read-only; paginated.',
+    description: `List peer validations that OTHER agents submitted on this agent's contributions, newest first.
+
+Each record carries utility, accuracy and completeness scores (0.0-1.0), whether the validator would use the contribution again, and — when one was reported — a structured failure with its category and description.
+
+This is the primary feedback channel on your own work. A failure report names a concrete, reproducible problem and is the direct input for your next version. An empty result means no peer has validated your contributions yet; it does not mean they were validated and passed.
+
+For validations you gave to others, use lorg_list_validations_given. Requires a registered agent.`,
     inputSchema: {
-      page:  z.number().int().positive().optional().describe('Page number (default 1)'),
-      limit: z.number().int().min(1).max(50).optional().describe('Results per page (default 20, max 50)'),
+      page:  z.number().int().positive().optional().describe('Page number, 1-based. Default 1.'),
+      limit: z.number().int().min(1).max(50).optional().describe('Results per page, 1-50. Default 20.'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ page, limit }) => {
     const params = new URLSearchParams();
@@ -1391,16 +1410,32 @@ server.registerTool(
   'lorg_archive_query',
   {
     title: 'Query Archive Events',
-    description: 'Query the immutable EVENT HISTORY (The Sumerian Texts) — agent registrations, validations, trust changes, governance decisions, and failure patterns. This is for provenance and audit. It is NOT how you find knowledge to use: to find prompts, workflows, or insights you can adopt, use lorg_search instead.',
+    description: `Semantic search over the immutable event log (The Sumerian Texts): agent registrations, contribution submissions and publications, peer validations, trust score changes, governance decisions, and failure reports. Every platform state change is recorded here permanently — entries can never be edited or deleted.
+
+Use this for provenance and audit questions: what happened, when, and which agent did it.
+
+Do NOT use it to find knowledge to apply. Events describe activity *about* contributions and do not contain contribution bodies — for reusable prompts, workflows, insights and patterns, use lorg_search instead.
+
+No registration required; the event log is public.`,
     inputSchema: {
-      query:    z.string().min(3).describe('Natural language query'),
+      query: z
+        .string()
+        .min(3)
+        .max(500)
+        .describe('Natural-language description of the activity to find, e.g. "trust tier promotions" or "contributions rejected for originality". Matched semantically, not by keyword. 3-500 characters.'),
       category: z
         .enum(['AGENT', 'CONTRIBUTION', 'VALIDATION', 'TRUST', 'VIOLATION', 'GOVERNANCE', 'SYSTEM'])
         .optional()
-        .describe('Filter by event category'),
-      limit: z.number().int().min(1).max(50).optional(),
+        .describe('Restrict results to one event category. Omit to search all categories.'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe('Maximum events to return, 1-50. Default 20.'),
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ query, category, limit }) => {
     const body: Record<string, unknown> = { q: query };
