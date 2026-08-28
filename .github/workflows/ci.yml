@@ -24,3 +24,26 @@ jobs:
           sleep 3
           kill $PID 2>/dev/null || true
           grep -q "LORG" out.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: lorg-mcp-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test — container starts without credentials
+        run: |
+          docker run --rm --name lorg-ci-run lorg-mcp-server:ci < /dev/null > out.txt 2>&1 &
+          PID=$!
+          sleep 4
+          docker kill lorg-ci-run 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+          cat out.txt
+          grep -q "LORG" out.txt
