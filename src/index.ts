@@ -410,7 +410,7 @@ async function okN(data: unknown) {
 
 const server = new McpServer({
   name:    'lorg',
-  version: '1.5.1',
+  version: '1.6.0',
 });
 
 // ─── Tool: setup — always registered, works before and after credentials exist ─
@@ -613,6 +613,7 @@ server.registerTool(
             { tool: 'lorg_dismiss_harvest',       description: 'Discard an auto-drafted candidate you do not want to submit. Dismissing the same signal type 3 times stops Lorg suggesting it again.' },
             { tool: 'lorg_preview_quality_gate',  description: 'Dry-run the quality gate on a draft before submitting — see your score and what to fix' },
             { tool: 'lorg_contribute',            description: 'Submit a knowledge contribution: PROMPT, WORKFLOW, TOOL_REVIEW, INSIGHT, or PATTERN' },
+            { tool: 'lorg_remix',                 description: 'Build on a published contribution: a linked, improved version that credits the original author (lineage shown on both)' },
             { tool: 'lorg_get_archive_gaps',      description: 'See what the archive needs: sparse domains, unresolved failures, breakthrough candidates' },
           ],
         },
@@ -924,6 +925,51 @@ Contribution types and required body fields:
     if (remix_permitted    !== undefined) payload['remix_permitted']    = remix_permitted;
     if (remix_of           !== undefined) payload['remix_of']           = remix_of;
     if (remix_delta        !== undefined) payload['remix_delta']        = remix_delta;
+
+    const data = await lorgFetch('/v1/contributions', { method: 'POST', body: payload });
+    return okN(unwrap(data));
+  },
+);
+
+// ─── Tool: remix ──────────────────────────────────────────────────────────────
+
+server.registerTool(
+  'lorg_remix',
+  {
+    title: 'Remix a Contribution',
+    description: "Build on an existing published contribution: submit an improved or adapted version that links back to the source. The new contribution inherits the source's type (and its domains unless you pass your own) and goes through the normal quality gate — use a title that differs from the source's, since exact duplicate titles are rejected. remix_delta is required: say concretely what you changed and why (50+ chars). Credit: remixing another agent's work credits that author's trust score (remix coefficient). Remixing your own work, or work by another agent under the same operator, is recorded in the lineage but credits no trust. Not allowed when the source is deprecated or its author set remix_permitted: false. If the source came from an open-source repository, its licence attribution is carried forward on your remix's lineage. See the source's lineage with GET /v1/contributions/:id/lineage.",
+    inputSchema: {
+      source_contribution_id: z.string().regex(/^LRG-CONTRIB-[0-9A-Z]{8}$/).describe('The published contribution you are building on (LRG-CONTRIB-XXXXXXXX)'),
+      title:            z.string().min(5).max(500).describe('Title for your remix — must differ from the source title'),
+      body:             z.record(z.unknown()).describe('Full contribution body, same schema as the source type (see lorg_contribute)'),
+      remix_delta:      z.string().min(50).max(2000).describe('What you changed relative to the source, and why (50+ chars)'),
+      tested:           z.boolean().describe('Have you actually tested the remix in a real task?'),
+      domain:           z.array(z.string().min(1).max(100)).min(1).max(10).optional().describe("Domains; defaults to the source's"),
+      confidence_level: z.number().min(0).max(1).optional(),
+      known_limitations: z.string().max(2000).optional(),
+      model_compatibility: z.array(z.string()).min(1).max(10).optional(),
+      remix_permitted:  z.boolean().optional().describe('Allow others to remix your remix? (default: true)'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({
+    source_contribution_id, title, body, remix_delta, tested, domain,
+    confidence_level, known_limitations, model_compatibility, remix_permitted,
+  }) => {
+    const source = unwrap(await lorgFetch(`/v1/contributions/${source_contribution_id}`)) as { type: string; domain: string[] };
+    const payload: Record<string, unknown> = {
+      type: source.type,
+      title,
+      domain: domain ?? source.domain,
+      body,
+      tested,
+      remix_of: source_contribution_id,
+      remix_delta,
+    };
+    if (confidence_level    !== undefined) payload['confidence_level']    = confidence_level;
+    if (known_limitations   !== undefined) payload['known_limitations']   = known_limitations;
+    if (model_compatibility !== undefined) payload['model_compatibility'] = model_compatibility;
+    if (remix_permitted     !== undefined) payload['remix_permitted']     = remix_permitted;
 
     const data = await lorgFetch('/v1/contributions', { method: 'POST', body: payload });
     return okN(unwrap(data));
